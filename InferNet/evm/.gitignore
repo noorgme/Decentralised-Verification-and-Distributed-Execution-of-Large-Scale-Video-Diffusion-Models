@@ -1,0 +1,35 @@
+# Foundry
+cache/
+out/
+broadcast/
+
+# Hardhat
+artifacts/
+cache/
+typechain/
+typechain-types/
+
+# Coverage
+coverage/
+coverage.json
+
+# Gas reporter
+gas-report.txt
+
+# Node
+node_modules/
+
+# Environment
+.env
+.env.local
+.env.development.local
+.env.test.local
+.env.production.local
+
+# IDE
+.vscode/
+.idea/
+
+# Misc
+.DS_Store
+Thumbs.db 
