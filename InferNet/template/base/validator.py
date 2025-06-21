@@ -4,14 +4,14 @@
 # Copyright © 2025 Noor Elsheikh
 
 # Permission is hereby granted, free of charge, to any person obtaining a copy of this software and associated
-# documentation files (the “Software”), to deal in the Software without restriction, including without limitation
+# documentation files (the "Software"), to deal in the Software without restriction, including without limitation
 # the rights to use, copy, modify, merge, publish, distribute, sublicense, and/or sell copies of the Software,
 # and to permit persons to whom the Software is furnished to do so, subject to the following conditions:
 
 # The above copyright notice and this permission notice shall be included in all copies or substantial portions of
 # the Software.
 
-# THE SOFTWARE IS PROVIDED “AS IS”, WITHOUT WARRANTY OF ANY KIND, EXPRESS OR IMPLIED, INCLUDING BUT NOT LIMITED TO
+# THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR IMPLIED, INCLUDING BUT NOT LIMITED TO
 # THE WARRANTIES OF MERCHANTABILITY, FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL
 # THE AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER LIABILITY, WHETHER IN AN ACTION
 # OF CONTRACT, TORT OR OTHERWISE, ARISING FROM, OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER
@@ -189,25 +189,65 @@ class BaseValidatorNeuron(BaseNeuron):
         Sets the validator weights to the metagraph hotkeys based on the scores it has received from the miners. The weights determine the trust and incentive level the validator assigns to miner nodes on the network.
         """
 
+        # Ensure scores is a numpy array with proper dtype
+        if isinstance(self.scores, dict):
+            # If scores is a dictionary, convert it to a numpy array
+            # Assuming the dictionary has numeric values that can be converted to scores
+            try:
+                # Try to extract values from the dictionary
+                if hasattr(self.scores, 'values'):
+                    score_values = list(self.scores.values())
+                else:
+                    score_values = list(self.scores.values()) if hasattr(self.scores, 'values') else []
+                
+                # Convert to numpy array
+                self.scores = np.array(score_values, dtype=np.float32)
+                bt.logging.warning(f"Converted scores from dict to numpy array with {len(self.scores)} elements")
+            except Exception as e:
+                bt.logging.error(f"Failed to convert scores dict to numpy array: {e}")
+                # Fallback: create a zero array
+                self.scores = np.zeros(self.metagraph.n, dtype=np.float32)
+        elif not isinstance(self.scores, np.ndarray):
+            # If it's not a dict but also not a numpy array, try to convert it
+            try:
+                self.scores = np.array(self.scores, dtype=np.float32)
+            except Exception as e:
+                bt.logging.error(f"Failed to convert scores to numpy array: {e}")
+                # Fallback: create a zero array
+                self.scores = np.zeros(self.metagraph.n, dtype=np.float32)
+        
         # Check if self.scores contains any NaN values and log a warning if it does.
-        if np.isnan(np.array(list(self.scores.values()))).any():
-
-            bt.logging.warning(
-                f"Scores contain NaN values. This may be due to a lack of responses from miners, or a bug in your reward functions."
-            )
+        try:
+            if np.isnan(self.scores).any():
+                bt.logging.warning(
+                    f"Scores contain NaN values. This may be due to a lack of responses from miners, or a bug in your reward functions."
+                )
+        except (TypeError, ValueError) as e:
+            bt.logging.warning(f"Could not check for NaN values in scores: {e}")
+            # Convert to float32 to ensure compatibility
+            try:
+                self.scores = np.array(self.scores, dtype=np.float32)
+            except Exception as e:
+                bt.logging.error(f"Failed to convert scores to float32: {e}")
+                self.scores = np.zeros(self.metagraph.n, dtype=np.float32)
 
         # Calculate the average reward for each uid across non-zero values.
         # Replace any NaN values with 0.
         # Compute the norm of the scores
-        score_array = np.array(list(self.scores.values()))
-        norm = np.linalg.norm(score_array, ord=1, axis=0, keepdims=True)
+        score_array = self.scores.copy()  # Use the numpy array directly
+        
+        # Ensure score_array is 1D
+        if score_array.ndim > 1:
+            score_array = score_array.flatten()
+        
+        norm = np.linalg.norm(score_array, ord=1)
 
         # Check if the norm is zero or contains NaN values
-        if np.any(norm == 0) or np.isnan(norm).any():
-            norm = np.ones_like(norm)  # Avoid division by zero or NaN
+        if norm == 0 or np.isnan(norm):
+            norm = 1.0  # Avoid division by zero or NaN
 
         # Compute raw_weights safely
-        raw_weights = self.scores / norm
+        raw_weights = score_array / norm
 
         bt.logging.debug("raw_weights", raw_weights)
         bt.logging.debug("raw_weight_uids", str(self.metagraph.uids.tolist()))
@@ -254,6 +294,22 @@ class BaseValidatorNeuron(BaseNeuron):
         """Resyncs the metagraph and updates the hotkeys and moving averages based on the new metagraph."""
         bt.logging.info("resync_metagraph()")
 
+        # Ensure scores is a numpy array before proceeding
+        if not isinstance(self.scores, np.ndarray):
+            if isinstance(self.scores, dict):
+                try:
+                    score_values = list(self.scores.values())
+                    self.scores = np.array(score_values, dtype=np.float32)
+                except Exception as e:
+                    bt.logging.error(f"Failed to convert scores dict to numpy array: {e}")
+                    self.scores = np.zeros(self.metagraph.n, dtype=np.float32)
+            else:
+                try:
+                    self.scores = np.array(self.scores, dtype=np.float32)
+                except Exception as e:
+                    bt.logging.error(f"Failed to convert scores to numpy array: {e}")
+                    self.scores = np.zeros(self.metagraph.n, dtype=np.float32)
+
         # Copies state of metagraph before syncing.
         previous_metagraph = copy.deepcopy(self.metagraph)
 
@@ -267,16 +323,26 @@ class BaseValidatorNeuron(BaseNeuron):
         bt.logging.info(
             "Metagraph updated, re-syncing hotkeys, dendrite pool and moving averages"
         )
+        
+        # Ensure scores array is the right size
+        if len(self.scores) != self.metagraph.n:
+            bt.logging.warning(f"Scores array size ({len(self.scores)}) doesn't match metagraph size ({self.metagraph.n})")
+            # Resize scores array to match metagraph
+            new_scores = np.zeros(self.metagraph.n, dtype=np.float32)
+            min_len = min(len(self.scores), self.metagraph.n)
+            new_scores[:min_len] = self.scores[:min_len]
+            self.scores = new_scores
+        
         # Zero out all hotkeys that have been replaced.
         for uid, hotkey in enumerate(self.hotkeys):
-            if hotkey != self.metagraph.hotkeys[uid]:
+            if uid < len(self.scores) and hotkey != self.metagraph.hotkeys[uid]:
                 self.scores[uid] = 0  # hotkey has been replaced
 
         # Check to see if the metagraph has changed size.
         # If so, we need to add new hotkeys and moving averages.
         if len(self.hotkeys) < len(self.metagraph.hotkeys):
             # Update the size of the moving average scores.
-            new_moving_average = np.zeros((self.metagraph.n))
+            new_moving_average = np.zeros((self.metagraph.n), dtype=np.float32)
             min_len = min(len(self.hotkeys), len(self.scores))
             new_moving_average[:min_len] = self.scores[:min_len]
             self.scores = new_moving_average
@@ -286,6 +352,22 @@ class BaseValidatorNeuron(BaseNeuron):
 
     def update_scores(self, rewards: np.ndarray, uids: List[int]):
         """Performs exponential moving average on the scores based on the rewards received from the miners."""
+
+        # Ensure self.scores is a numpy array
+        if not isinstance(self.scores, np.ndarray):
+            if isinstance(self.scores, dict):
+                try:
+                    score_values = list(self.scores.values())
+                    self.scores = np.array(score_values, dtype=np.float32)
+                except Exception as e:
+                    bt.logging.error(f"Failed to convert scores dict to numpy array: {e}")
+                    self.scores = np.zeros(self.metagraph.n, dtype=np.float32)
+            else:
+                try:
+                    self.scores = np.array(self.scores, dtype=np.float32)
+                except Exception as e:
+                    bt.logging.error(f"Failed to convert scores to numpy array: {e}")
+                    self.scores = np.zeros(self.metagraph.n, dtype=np.float32)
 
         # Check if rewards contains NaN values.
         if np.isnan(rewards).any():

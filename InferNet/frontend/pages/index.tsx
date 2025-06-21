@@ -1,7 +1,7 @@
 /* pages/index.tsx */
 import { useState } from 'react'
 import Layout            from '../components/Layout'
-import { Button }        from '@/components/ui/button'
+import { Button }        from '../src/components/ui/button'
 import {
   useWriteContract,
   useAccount,
@@ -17,7 +17,8 @@ import CONTRACT_ABI      from '../contracts/InferNetRewards.abi.json'
 import { mainnet } from 'wagmi/chains'
 import { stringToBytes } from 'viem'
 
-const CONTRACT_ADDRESS = process.env.NEXT_PUBLIC_CONTRACT_ADDRESS as Address
+const CONTRACT_ADDRESS = process.env.NEXT_PUBLIC_CONTRACT_ADDRESS as Address || '0x9A9f2CCfdE556A7E9Ff0848998Aa4a0CFD8863AE' as Address
+const TAO_TOKEN_ADDRESS = process.env.NEXT_PUBLIC_TAO_TOKEN_ADDRESS as Address || '0x959922bE3CAee4b8Cd9a407cc3ac1C251C2007B1' as Address
 
 export default function Home () {
   const [prompt,    setPrompt]    = useState('')
@@ -27,8 +28,50 @@ export default function Home () {
   const { writeContractAsync, isPending } = useWriteContract()
   const { address: account }               = useAccount()
 
+  // Debug logging
+  console.log('🔍 Frontend Contract Address Debug:')
+  console.log('  NEXT_PUBLIC_CONTRACT_ADDRESS:', process.env.NEXT_PUBLIC_CONTRACT_ADDRESS)
+  console.log('  CONTRACT_ADDRESS (typed):', CONTRACT_ADDRESS)
+  console.log('  Environment check:', typeof process.env.NEXT_PUBLIC_CONTRACT_ADDRESS)
+  console.log('  TAO Token Address:', TAO_TOKEN_ADDRESS)
+  console.log('  Account:', account)
+
   //  helpers
   
+  // Function to ensure we're connected to Anvil network
+  const ensureAnvilNetwork = async () => {
+    if (typeof window.ethereum !== 'undefined') {
+      try {
+        // Try to switch to Anvil network (chain ID 31337)
+        await window.ethereum.request({
+          method: 'wallet_switchEthereumChain',
+          params: [{ chainId: '0x7a69' }], // 31337 in hex
+        });
+      } catch (switchError: any) {
+        // If the network doesn't exist, add it
+        if (switchError.code === 4902) {
+          try {
+            await window.ethereum.request({
+              method: 'wallet_addEthereumChain',
+              params: [{
+                chainId: '0x7a69',
+                chainName: 'Anvil',
+                nativeCurrency: {
+                  name: 'ETH',
+                  symbol: 'ETH',
+                  decimals: 18
+                },
+                rpcUrls: ['http://localhost:8545'],
+                blockExplorerUrls: []
+              }],
+            });
+          } catch (addError) {
+            console.error('Failed to add Anvil network:', addError);
+          }
+        }
+      }
+    }
+  };
   
   // *** flat protocol fee  for test
   const FIXED_DEPOSIT_ETH = '0.02'                // string keeps TS happy
@@ -40,6 +83,8 @@ export default function Home () {
       return
     }
     
+    // Ensure we're connected to Anvil network
+    await ensureAnvilNetwork()
 
     try {
       // 1. generate deterministic job id
@@ -47,7 +92,34 @@ export default function Home () {
       const reqId     = BigInt('0x' + hexNanoid())   
       setJobId(reqId)
 
-      // 2. on-chain commit-and-deposit
+      // 2. First approve TAO tokens for the contract
+      setStatus('Approving TAO tokens...')
+      const approveTxHash: Hex = await writeContractAsync({
+        address: TAO_TOKEN_ADDRESS, // TAO token address
+        abi: [
+          {
+            "inputs": [
+              { "internalType": "address", "name": "spender", "type": "address" },
+              { "internalType": "uint256", "name": "amount", "type": "uint256" }
+            ],
+            "name": "approve",
+            "outputs": [{ "internalType": "bool", "name": "", "type": "bool" }],
+            "stateMutability": "nonpayable",
+            "type": "function"
+          }
+        ],
+        functionName: 'approve',
+        args: [CONTRACT_ADDRESS, FIXED_DEPOSIT_WEI],
+        overrides: {
+          gasLimit: 100_000n
+        }
+      })
+      setStatus(`TAO approval sent: ${approveTxHash.slice(0, 10)}...`)
+
+      // Wait for approval to be mined
+      await new Promise(resolve => setTimeout(resolve, 2000))
+
+      // 3. on-chain commit-and-deposit
       setStatus('Submitting on-chain deposit ')
       const txHash: Hex = await writeContractAsync({
         address:       CONTRACT_ADDRESS,
@@ -60,12 +132,26 @@ export default function Home () {
       })
       setStatus(`Tx sent: ${txHash.slice(0, 10)} waiting for confirm`)
 
-      // 3. off-chain prompt delivery
-      await fetch('/submit_prompt', {
+      // 4. Wait for transaction confirmation before calling API
+      setStatus('Waiting for transaction confirmation...')
+      
+      // Wait a bit for the transaction to be mined and events to be processed
+      await new Promise(resolve => setTimeout(resolve, 3000)) // Wait 3 seconds
+      
+      setStatus('Transaction confirmed, submitting prompt to validator...')
+
+      // 5. off-chain prompt delivery
+      const response = await fetch('http://localhost:8080/submit_prompt', {
         method:  'POST',
         headers: { 'Content-Type': 'application/json' },
         body:    JSON.stringify({ request_id: reqId.toString(), prompt }),
       })
+      
+      if (!response.ok) {
+        const errorData = await response.json()
+        throw new Error(errorData.message || 'Failed to submit prompt')
+      }
+      
       setStatus('Prompt submitted awaiting validators')
     } catch (err) {
       console.error(err)
@@ -96,7 +182,7 @@ export default function Home () {
           {/* amount  --------------------------------------------------- */}
           {/* fixed price banner --------------------------------------- */}
           <p className="text-center text-sm text-blue-600">
-            Deposit required: <b>{FIXED_DEPOSIT_ETH} ETH</b>
+            Deposit required: <b>{FIXED_DEPOSIT_ETH} TAO</b>
           </p>
 
           {/* action  --------------------------------------------------- */}
@@ -119,8 +205,16 @@ export default function Home () {
           )}
 
           {jobId !== null && (
-            <div className="text-xs text-center text-gray-400 break-all mt-2">
-              <span className="font-semibold text-gray-500">Job ID:</span> <span className="font-mono">{jobId.toString(16)}</span>
+            <div className="text-center space-y-2 mt-4">
+              <div className="text-xs text-gray-400 break-all">
+                <span className="font-semibold text-gray-500">Job ID:</span> <span className="font-mono">{jobId.toString()}</span>
+              </div>
+              <a 
+                href={`/status/${jobId.toString()}`}
+                className="inline-block px-4 py-2 bg-blue-600 text-white rounded-lg hover:bg-blue-700 transition-colors text-sm font-medium"
+              >
+                View Job Status
+              </a>
             </div>
           )}
         </div>

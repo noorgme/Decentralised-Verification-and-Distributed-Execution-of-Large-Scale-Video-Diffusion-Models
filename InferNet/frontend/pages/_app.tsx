@@ -10,16 +10,15 @@ import { mainnet, polygon, optimism, arbitrum, base, anvil} from 'wagmi/chains'
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query'
 import { useState } from 'react';
 
-
 /* Build wagmi config */
 const wagmiConfig = getDefaultConfig({
   appName: 'InferNet',
-  projectId: process.env.NEXT_PUBLIC_WC_PROJECT_ID!,
-  chains: [mainnet, polygon, optimism, arbitrum, base, anvil],
+  projectId: process.env.NEXT_PUBLIC_WC_PROJECT_ID || '1234567890abcdef1234567890abcdef',
+  chains: [anvil],
   ssr: true,
 })
 
-  /* App root */
+/* App root */
 export default function App({ Component, pageProps }: AppProps) {
   const [queryClient] = useState(() => new QueryClient())
 

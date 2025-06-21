@@ -78,8 +78,8 @@ async def forward(self):
                 num_frames=16,
                 fps=8
             ),
-            deserialize=True,
-            timeout=500  # Longer timeout for video gen
+            deserialize=False,
+            timeout=500 
         )
         
         # Process responses

@@ -31,17 +31,30 @@ class InferNet(bt.Synapse):
     num_frames: int = 16
     fps: int = 8
     seed: typing.Optional[int] = None
-    challenge: typing.Optional[bytes] = None
-    merkle_root: typing.Optional[bytes] = None
-    signature: typing.Optional[bytes] = None
+    challenge: typing.Optional[str] = None
+    request_id: typing.Optional[str] = None
+    merkle_root: typing.Optional[str] = None
+    signature: typing.Optional[str] = None
     timesteps: typing.Optional[typing.List[int]] = None
+    latents: typing.Optional[typing.List[str]] = None
+    noise_preds: typing.Optional[typing.List[str]] = None
     video_data_b64: typing.Optional[str] = None
+    proof: typing.Optional[typing.Dict[str, typing.Any]] = None
     
     @validator('width', 'height', 'num_frames', 'fps', 'seed', pre=True)
     def ensure_int(cls, v):
         """Convert string params to int."""
         if isinstance(v, str):
             return int(v)
+        return v
+    
+    @validator('timesteps', pre=True)
+    def ensure_timesteps_int(cls, v):
+        """Convert timesteps list to integers."""
+        if v is None:
+            return None
+        if isinstance(v, list):
+            return [int(x) if isinstance(x, str) else x for x in v]
         return v
     
     def deserialize(self) -> bytes:
@@ -63,4 +76,20 @@ class RevealLeavesSynapse(bt.Synapse):
     indices: typing.List[int]
     request_id: str
     caller_hotkey: str
-    leaves: typing.Optional[typing.Dict[int, typing.Tuple[bytes, bytes, typing.List[bytes]]]] = None
+    leaves: typing.Optional[typing.Dict[int, typing.Tuple[str, str, typing.List[str]]]] = None
+    
+    @validator('leaves', pre=True)
+    def _decode_leaves_b64(cls, v):
+        """Decode base64 leaf data back to bytes."""
+        if v is None:
+            return None
+        try:
+            decoded_leaves = {}
+            for idx, (z_b64, eps_b64, proof_path_b64) in v.items():
+                z_bytes = base64.b64decode(z_b64)
+                eps_bytes = base64.b64decode(eps_b64)
+                proof_path_bytes = [base64.b64decode(p) for p in proof_path_b64]
+                decoded_leaves[idx] = (z_bytes, eps_bytes, proof_path_bytes)
+            return decoded_leaves
+        except Exception:
+            raise ValueError(f"Invalid base64 in leaves data")

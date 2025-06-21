@@ -1,0 +1,3 @@
+[submodule "InferNet/lib/openzeppelin-contracts"]
+	path = InferNet/lib/openzeppelin-contracts
+	url = https://github.com/OPenZeppelin/openzeppelin-contracts

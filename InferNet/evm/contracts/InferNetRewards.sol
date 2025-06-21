@@ -1,10 +1,7 @@
 // SPDX-License-Identifier: MIT
 pragma solidity ^0.8.0;
 
-interface IERC20 {
-    function transfer(address to, uint256 amount) external returns (bool);
-    function transferFrom(address from, address to, uint256 amount) external returns (bool);
-}
+import "@openzeppelin/contracts/token/ERC20/IERC20.sol";
 
 contract InferNetRewards {
     struct Submission {
@@ -119,13 +116,13 @@ contract InferNetRewards {
         minerStakes[msg.sender] += amount;
     }
 
-    // User or anyone (after timeout) can reclaim deposit if no valid submissions
+    // Reclaim deposit if not used
     function refundUnused(uint256 requestId) external {
         address user = userRequests[requestId];
         uint256 pool = rewardPools[requestId];
         require(pool > 0, "No funds to refund");
         require(submissions[requestId].length == 0, "Submissions exist");
-        // Optionally, add a timeout: require(block.timestamp > ...)
+        
         require(msg.sender == user, "Only original user can refund (or add timeout logic)");
         rewardPools[requestId] = 0;
         userRequests[requestId] = address(0);

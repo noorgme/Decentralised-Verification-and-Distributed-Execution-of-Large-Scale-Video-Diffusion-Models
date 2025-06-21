@@ -1,7 +1,7 @@
 import { useState } from 'react';
 import { useRouter } from 'next/router';
-import { Layout } from '../../components/Layout';
-import { Button } from 'shadcn-ui';
+import Layout from '../../components/Layout';
+import { Button } from '../../src/components/ui/button';
 
 export default function StatusIndex() {
   const [requestId, setRequestId] = useState('');

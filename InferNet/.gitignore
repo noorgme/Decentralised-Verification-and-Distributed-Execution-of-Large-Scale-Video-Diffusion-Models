@@ -92,6 +92,6 @@ Thumbs.db
 
 # Project specific
 out/
-events/
 *.db
 *.sqlite3 
+generated_videos/

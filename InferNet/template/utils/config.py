@@ -153,6 +153,28 @@ def add_miner_args(cls, parser):
         default=False,
     )
 
+    # Diffusion parameters
+    parser.add_argument(
+        "--diffusion.num_steps",
+        type=int,
+        help="Number of diffusion steps",
+        default=25,
+    )
+
+    parser.add_argument(
+        "--diffusion.guidance_scale",
+        type=float,
+        help="Guidance scale for generation",
+        default=7.5,
+    )
+
+    parser.add_argument(
+        "--diffusion.eta",
+        type=float,
+        help="Eta parameter for DDIM",
+        default=0.0,
+    )
+
     parser.add_argument(
         "--wandb.project_name",
         type=str,
@@ -212,14 +234,14 @@ def add_validator_args(cls, parser):
         "--validator.poll_interval",
         type=float,
         help="Spot-check interval (s)",
-        default=60.0,
+        default=3,
     )
 
     parser.add_argument(
         "--validator.num_checkpoints",
         type=int,
         help="Number of checkpoints to store",
-        default=10,
+        default=3,
     )
 
     parser.add_argument(
@@ -227,6 +249,65 @@ def add_validator_args(cls, parser):
         type=int,
         help="Challenge size for PoI",
         default=32,
+    )
+
+    # Video generation parameters
+    parser.add_argument(
+        "--validator.width",
+        type=int,
+        help="Video width",
+        default=128,
+    )
+
+    parser.add_argument(
+        "--validator.height",
+        type=int,
+        help="Video height",
+        default=128,
+    )
+
+    parser.add_argument(
+        "--validator.num_frames",
+        type=int,
+        help="Number of video frames",
+        default=3,
+    )
+
+    parser.add_argument(
+        "--validator.fps",
+        type=int,
+        help="Video frames per second",
+        default=1,
+    )
+
+    # Diffusion parameters
+    parser.add_argument(
+        "--diffusion.num_steps",
+        type=int,
+        help="Number of diffusion steps",
+        default=4,
+    )
+
+    # UNet configuration parameters
+    parser.add_argument(
+        "--unet_config.latent_channels",
+        type=int,
+        help="Number of latent channels",
+        default=4,
+    )
+
+    parser.add_argument(
+        "--unet_config.latent_height",
+        type=int,
+        help="Latent height (video_height // 8)",
+        default=40,
+    )
+
+    parser.add_argument(
+        "--unet_config.latent_width",
+        type=int,
+        help="Latent width (video_width // 8)",
+        default=72,
     )
 
     # Network params
