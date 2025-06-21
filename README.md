@@ -11,7 +11,7 @@ Multi-stage Experiments to derive and benchmark a hybrid static-plus-dynamic dis
 - Context coherence enhancements to address temporal coherence loss, but significant artefacts remain. 
 - Enables SOTA latent video diffusion models on consumer-level setups at the trade-off of latency and added artefacts from loss of temporal separation between frame-segment generation.
 
-### 2. InferNet: Decentralised Verifiable Network - (PROOF OF CONCEPT)
+### 2. InferNet: Decentralised Verifiable Network - (Beta)
 Design and implementation of a decentralised network transforming idle, heterogeneous consumer GPUs into cooperative miner nodes:
 - Novel commit-then-reveal Proof-of-Inference verification scheme
 - Merkle-tree commitments with randomised spot-checking
