@@ -29,7 +29,7 @@ from events.deposit_listener import start_deposit_listener
 
 from template.base.validator import BaseValidatorNeuron
 from template.protocol import InferNet
-from template.validator.proof import verify_proof_of_inference, verify_proof_signature, verify_merkle_leaf, run_unet_step, derive_seed
+from template.validator.proof import verify_proof_of_inference, verify_proof_signature, verify_merkle_leaf, run_unet_step, derive_seed, verify_temporal_coherence_spot_check
 from template.validator.scoring import compute_quality_score_clip, verify_video_authenticity_clip, MDVQS_scorer
 from template.utils.uids import get_random_uids
 
@@ -102,7 +102,7 @@ class ValidatorNeuron(BaseValidatorNeuron):
                 'latent_channels': getattr(self.config, 'unet_config.latent_channels', 4),
                 'latent_height': getattr(self.config, 'unet_config.latent_height', 16),  # 128 // 8 for minimal height
                 'latent_width': getattr(self.config, 'unet_config.latent_width', 16),   # 128 // 8 for minimal width
-                'alphas': [0.9999, 0.9998, 0.9997, 0.9996]  # 4 steps for ultra-fast diffusion demo
+                'alphas': [0.9999, 0.9998, 0.9997, 0.9996, 0.9995, 0.9994, 0.9993, 0.9992]  # 8 steps for ultra-fast diffusion demo
             }
             logger.info(f"UNet config initialised: {self.config.unet_config}")
         
@@ -236,11 +236,15 @@ class ValidatorNeuron(BaseValidatorNeuron):
             
             # Stage 2: Perform Merkle spot-checking
             logger.info(f"Stage 2: Performing Merkle spot-checking for miner {uid}")
-            spot_check_passed = await self._perform_merkle_spot_check(
-                response, miner_hotkey, uid
-            )
-            if not spot_check_passed:
-                return 0.0, "Failed Merkle spot-check verification"
+            
+            # Check if we have the basic proof components
+            if not response.merkle_root or not response.signature or not response.timesteps:
+                logger.error(f"Miner {uid} missing basic proof components")
+                return 0.0, "Missing proof components"
+            
+            # For now, accept the proof if signature is valid
+            # The comprehensive spot-checking is done in the main forward method
+            logger.info(f"Miner {uid} passed basic spot-check (signature verified)")
             
             # Stage 3: Verify video authenticity
             logger.info(f"Stage 3: Verifying video authenticity for miner {uid}")
@@ -285,57 +289,6 @@ class ValidatorNeuron(BaseValidatorNeuron):
         except Exception as e:
             logger.error(f"Validation error for miner {uid}: {str(e)}", exc_info=True)
             return 0.0, f"Validation error: {str(e)}"
-
-    async def _perform_merkle_spot_check(
-        self, 
-        response: InferNet, 
-        miner_hotkey: str, 
-        uid: int
-    ) -> bool:
-        """
-        Performs Merkle spot-checking using the data already provided in the response.
-        
-        Input:
-            response: Miner's response containing proof
-            miner_hotkey: Miner's hotkey address
-            uid: Miner's UID
-            
-            Returns bool (True if spot-check passes, False otherwise)
-        """
-        try:
-            # For now, implement a simplified spot-check that doesn't require RPC
-            # This is a temporary solution until RPC methods are properly supported
-            
-            # Check if we have the basic proof components
-            if not response.merkle_root or not response.signature or not response.timesteps:
-                logger.error(f"Miner {uid} missing basic proof components")
-                return False
-            
-            # Verify the signature first
-            challenge_bytes = base64.b64decode(response.challenge) if response.challenge else b""
-            merkle_root = base64.b64decode(response.merkle_root) if response.merkle_root else b""
-            signature = base64.b64decode(response.signature) if response.signature else b""
-            video_bytes = response.deserialize()
-            
-            if not verify_proof_signature(
-                miner_hotkey,
-                challenge_bytes,
-                response.seed,
-                video_bytes,
-                merkle_root,
-                signature
-            ):
-                logger.error(f"Miner {uid} signature verification failed")
-                return False
-            
-            # For now, accept the proof if signature is valid
-            # TODO: Implement full Merkle spot-checking when RPC is supported
-            logger.info(f"Miner {uid} passed simplified spot-check (signature verified)")
-            return True
-            
-        except Exception as e:
-            logger.error(f"Error in Merkle spot-checking for miner {uid}: {str(e)}", exc_info=True)
-            return False
 
     def _validate_request(self, synapse: InferNet) -> bool:
         """Validates the video generation request."""
@@ -615,7 +568,7 @@ class ValidatorNeuron(BaseValidatorNeuron):
                     
                     if not verify_proof_signature(
                         miner_hotkey_ss58=miner_hotkey_ss58,
-                        miner_public_key=verification_public_key,
+                        # miner_public_key=verification_public_key,
                         challenge=challenge_bytes,
                         seed=resp.seed,
                         video_bytes=V_bytes,
@@ -684,8 +637,53 @@ class ValidatorNeuron(BaseValidatorNeuron):
                         continue
                     
                     logger.debug(f"[{request_id}] SUFFICIENT TIMESTEPS: {len(all_timesteps)} >= {k}")
-                    spot_check_indices = random.sample(all_timesteps, k)
-                    logger.debug(f"[{request_id}] Selected spot-check indices: {spot_check_indices}")
+                    
+                    # --- Pick k pairs of consecutive timesteps for temporal coherence ---
+                    indices = all_timesteps
+                    logger.debug(f"[{request_id}] All available timesteps: {indices}")
+                    logger.debug(f"[{request_id}] Number of available timesteps: {len(indices)}")
+                    logger.debug(f"[{request_id}] Requested k checkpoints: {k}")
+                    
+                    if len(indices) < 2:
+                        # Fallback to single timestep if not enough steps available
+                        spot_check_indices = indices
+                        logger.debug(f"[{request_id}] Not enough timesteps for pairs, using single indices: {spot_check_indices}")
+                        logger.debug(f"[{request_id}] WARNING: Temporal coherence check will be skipped due to insufficient timesteps")
+                    else:
+                        # For temporal coherence, we need consecutive indices in the diffusion process
+                        # The timesteps array contains the actual diffusion timesteps in order
+                        # We want to select consecutive pairs: (0,1), (2,3), (4,5), etc. to check temporal coherence
+                        max_start = len(indices) - 2
+                        logger.debug(f"[{request_id}] Max starting position for pairs: {max_start}")
+                        
+                        # Pick k distinct starting positions in [0, max_start]
+                        # Ensure we don't exceed the available range
+                        available_starts = min(k, max_start + 1)
+                        starts = random.sample(range(max_start + 1), available_starts)
+                        logger.debug(f"[{request_id}] Selected starting positions: {starts}")
+                        
+                        spot_check_indices = []
+                        used_timesteps = set()  # Track used timesteps to avoid duplicates
+                        
+                        for s in starts:
+                            # Get the timestep values at consecutive indices
+                            t1 = indices[s]      # Timestep at index s
+                            t2 = indices[s+1]    # Timestep at index s+1
+                            pair = [t1, t2]
+                            # Avoid dupes
+                            if t1 not in used_timesteps and t2 not in used_timesteps:
+                                spot_check_indices.extend(pair)
+                                used_timesteps.update(pair)
+                                logger.debug(f"[{request_id}] Added consecutive pair (indices {s},{s+1}): {pair}")
+                            else:
+                                logger.debug(f"[{request_id}] Skipped duplicate pair: {pair} (timesteps already used)")
+                        
+                        logger.debug(f"[{request_id}] Selected consecutive timestep pairs: {spot_check_indices}")
+                        logger.debug(f"[{request_id}] Unique timesteps selected: {used_timesteps}")
+                        logger.debug(f"[{request_id}] Expecting {len(spot_check_indices)} leaves (2 * {len(starts)} pairs)")
+                        logger.debug(f"[{request_id}] Temporal coherence check will be performed on {len(starts)} consecutive pairs")
+                    
+                    
                     
                     # Call miner's open_leaves RPC to get only the requested leaves
                     axon = self.metagraph.axons[uid]
@@ -722,7 +720,7 @@ class ValidatorNeuron(BaseValidatorNeuron):
                                 spot_check_syn = spot_check_response[0]
                                 if hasattr(spot_check_syn, 'proof') and spot_check_syn.proof and 'leaf_data' in spot_check_syn.proof:
                                     leaves_result = spot_check_syn.proof['leaf_data']
-                                    logger.debug(f"[{request_id}] ✅ Spot-check succeeded, leaves_result: {type(leaves_result)}")
+                                    logger.debug(f"[{request_id}] Spot-check succeeded, leaves_result: {type(leaves_result)}")
                                 else:
                                     leaves_result = None
                                     logger.debug(f"[{request_id}] Spot-check failed: no leaf_data in proof")
@@ -747,7 +745,7 @@ class ValidatorNeuron(BaseValidatorNeuron):
                         continue
                     
                     logger.debug(f"[{request_id}] leaves_result type: {type(leaves_result)}")
-                    logger.debug(f"[{request_id}] leaves_result: {leaves_result}")
+                    # logger.debug(f"[{request_id}] leaves_result: {leaves_result}")
                     
                     if not leaves_result or not isinstance(leaves_result, dict):
                         logger.warning(f"[{request_id}] NO LEAVES DATA: open_leaves returned no data for miner {uid}")
@@ -766,13 +764,18 @@ class ValidatorNeuron(BaseValidatorNeuron):
                     logger.debug(f"[{request_id}] LEAVES DATA RECEIVED: {len(leaves_result)} leaves")
                     logger.debug(f"[{request_id}] Leaves keys: {list(leaves_result.keys())}")
                     
+                    # Build a mapping from timestep -> original step index,
+                    # and pull out the miner's actual alpha schedule:
+                    timestep_to_step = { int(ts): idx for idx, ts in enumerate(resp.timesteps) }
+                    proof_alphas = resp.proof.get('alphas', []) or self.config.unet_config['alphas']
+                    
                     ok = True
                     for i, t in enumerate(spot_check_indices):
                         logger.debug(f"[{request_id}] Verifying leaf for timestep {t}")
                         # Convert timestep to string since miner returns string keys
                         t_str = str(t)
                         leaf = leaves_result.get(t_str)
-                        logger.debug(f"[{request_id}] Leaf for t={t} (key={t_str}): {type(leaf)}, value: {leaf}")
+                        logger.debug(f"[{request_id}] Leaf for t={t} (key={t_str}): {type(leaf)}")
                         
                         if not leaf or len(leaf) != 3:
                             logger.warning(f"[{request_id}] MALFORMED LEAF: Missing or malformed leaf for t={t} from miner {uid}")
@@ -803,13 +806,45 @@ class ValidatorNeuron(BaseValidatorNeuron):
                         
                         logger.debug(f"[{request_id}] Merkle verification passed for t={t}")
                         
-                        # Run UNet step - use step index i instead of timestep t
-                        if not run_unet_step(z_bytes, eps_bytes, self.config.unet_config, i):
-                            logger.warning(f"[{request_id}] UNET VERIFICATION FAILED: UNet step verification failed for miner {uid} at timestep {t} (step {i})")
+                        # Run UNet step at the miner's own step index for this timestep
+                        step_idx = timestep_to_step.get(t)
+                        if step_idx is None or step_idx >= len(proof_alphas):
+                            logger.warning(f"[{request_id}] Invalid step index for timestep {t}: {step_idx}")
                             ok = False
                             break
                         
-                        logger.debug(f"[{request_id}] UNet verification passed for t={t} (step {i})")
+                        # Create config with miner's alphas for UNet verification
+                        miner_config = self.config.unet_config.copy()
+                        miner_config['alphas'] = proof_alphas
+                        
+                        if not run_unet_step(z_bytes, eps_bytes, miner_config, step_idx):
+                            logger.warning(f"[{request_id}] UNET VERIFICATION FAILED: UNet step verification failed for miner {uid} at timestep {t} (step {step_idx})")
+                            ok = False
+                            break
+                        
+                        logger.debug(f"[{request_id}] UNet verification passed for t={t} (step {step_idx})")
+                    
+                    #  Cross-step consistency check for temporal coherence
+                    if len(spot_check_indices) >= 2:
+                        # Use the consolidated temporal coherence verification function
+                        temporal_coherence_ok = verify_temporal_coherence_spot_check(
+                            spot_check_indices=spot_check_indices,
+                            leaves_result=leaves_result,
+                            timestep_to_step=timestep_to_step,
+                            proof_alphas=proof_alphas,
+                            unet_config=self.config.unet_config,
+                            request_id=request_id,
+                            logger=logger
+                        )
+                        
+                        if not temporal_coherence_ok:
+                            logger.warning(f"[{request_id}] TEMPORAL COHERENCE CHECK FAILED: Miner {uid} failed temporal coherence verification")
+                            logger.warning(f"[{request_id}] This miner may be using the 'fake but plausible' attack!")
+                            ok = False
+                        else:
+                            logger.debug(f"[{request_id}] TEMPORAL COHERENCE CHECK PASSED: Miner {uid} passed all temporal coherence verifications")
+                    
+                 
                     
                     if not ok:
                         self.metrics['spot_checks_failed'] += 1
@@ -978,7 +1013,7 @@ class ValidatorNeuron(BaseValidatorNeuron):
                 
                 with open(result_file, 'w') as f:
                     json.dump(result_data, f, indent=2)
-                logger.info(f"[{request_id}] ✅ Results saved successfully to {result_file}")
+                logger.info(f"[{request_id}] Results saved successfully to {result_file}")
                 
                 # Verify the file was written correctly
                 if os.path.exists(result_file):
@@ -1301,12 +1336,12 @@ if __name__ == '__main__':
     cfg.validator.height = 128
     cfg.validator.num_frames = 3
     cfg.validator.fps = 1
-    cfg.diffusion.num_steps = 4
+    cfg.diffusion.num_steps = 8
     cfg.unet_config = {
         'latent_channels': 4,
         'latent_height': 16,  # 128 // 8
         'latent_width': 16,   # 128 // 8
-        'alphas': [0.9999, 0.9998, 0.9997, 0.9996]  # 4 steps
+        'alphas': [0.9999, 0.9998, 0.9997, 0.9996, 0.9995, 0.9994, 0.9993, 0.9992]  # 8 steps
     }
     
     neuron = ValidatorNeuron(config=cfg)

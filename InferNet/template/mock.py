@@ -85,8 +85,7 @@ class MockDendrite(bt.dendrite):
                 process_time = random.random()
                 if process_time < timeout:
                     s.dendrite.process_time = str(time.time() - start_time)
-                    # Update the status code and status message of the dendrite to match the axon
-                    # TODO (developer): replace with your own expected synapse data
+                    
                     s.dummy_output = s.dummy_input * 2
                     s.dendrite.status_code = 200
                     s.dendrite.status_message = "OK"
@@ -97,7 +96,7 @@ class MockDendrite(bt.dendrite):
                     s.dendrite.status_message = "Timeout"
                     synapse.dendrite.process_time = str(timeout)
 
-                # Return the updated synapse object after deserializing if requested
+                # Return the updated synapse object after deserialising if requested
                 if deserialize:
                     return s.deserialize()
                 else:

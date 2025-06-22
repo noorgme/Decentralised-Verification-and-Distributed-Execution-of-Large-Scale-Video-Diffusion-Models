@@ -10,6 +10,62 @@ from transformers import CLIPProcessor, CLIPModel, CLIPTokenizerFast
 import torchvision.transforms as transforms
 import lpips
 
+def verify_video_authenticity_common(video_path: str) -> bool:
+    """Common video authenticity verification using entropy and frame differences."""
+    try:
+        cap = cv2.VideoCapture(video_path)
+        prev_frame = None
+        frame_diffs = []
+        entropies = []
+        
+        while cap.isOpened():
+            ret, frame = cap.read()
+            if not ret:
+                break
+                
+            # Frame entropy
+            gray = cv2.cvtColor(frame, cv2.COLOR_BGR2GRAY)
+            hist = cv2.calcHist([gray], [0], None, [256], [0, 256])
+            hist = hist / hist.sum()
+            entropy = -np.sum(hist * np.log2(hist + 1e-10))
+            entropies.append(entropy)
+            
+            if prev_frame is not None:
+                # Frame difference
+                diff = cv2.absdiff(frame, prev_frame)
+                frame_diffs.append(np.mean(diff))
+            
+            prev_frame = frame.copy()
+        
+        cap.release()
+        
+        if not frame_diffs or not entropies:
+            return False
+            
+        # Check entropy distribution
+        entropy_mean = np.mean(entropies)
+        entropy_std = np.std(entropies)
+        # Log entropy_mean and entropy_std
+        bt.logging.info(f"Entropy mean: {entropy_mean}, Entropy std: {entropy_std}")
+
+        if entropy_std < 0.01 or entropy_mean < 0.01:
+            return False
+            
+        # Check frame differences
+        diff_mean = np.mean(frame_diffs)
+        diff_std = np.std(frame_diffs)
+        # Log diff_mean and diff_std
+        bt.logging.info(f"Diff mean: {diff_mean}, Diff std: {diff_std}")
+
+        if diff_std < 0.01 or diff_mean < 0.01:
+            return False
+            
+        return True
+        
+    except Exception as e:
+        bt.logging.error(f"Error verifying video authenticity: {str(e)}")
+        return False
+
 class CLIPScorer:
     def __init__(self):
         """Video quality scorer using CLIP for frame-wise prompt alignment."""
@@ -92,59 +148,7 @@ class CLIPScorer:
 
     def verify_video_authenticity(self, video_path: str) -> bool:
         """Checks if video is authentic using entropy and frame differences."""
-        try:
-            cap = cv2.VideoCapture(video_path)
-            prev_frame = None
-            frame_diffs = []
-            entropies = []
-            
-            while cap.isOpened():
-                ret, frame = cap.read()
-                if not ret:
-                    break
-                    
-                # Frame entropy
-                gray = cv2.cvtColor(frame, cv2.COLOR_BGR2GRAY)
-                hist = cv2.calcHist([gray], [0], None, [256], [0, 256])
-                hist = hist / hist.sum()
-                entropy = -np.sum(hist * np.log2(hist + 1e-10))
-                entropies.append(entropy)
-                
-                if prev_frame is not None:
-                    # Frame difference
-                    diff = cv2.absdiff(frame, prev_frame)
-                    frame_diffs.append(np.mean(diff))
-                
-                prev_frame = frame.copy()
-            
-            cap.release()
-            
-            if not frame_diffs or not entropies:
-                return False
-                
-            # Check entropy distribution
-            entropy_mean = np.mean(entropies)
-            entropy_std = np.std(entropies)
-            # Log entropy_mean and entropy_std
-            bt.logging.info(f"Entropy mean: {entropy_mean}, Entropy std: {entropy_std}")
-
-            if entropy_std < 0.01 or entropy_mean < 0.01:
-                return False
-                
-            # Check frame differences
-            diff_mean = np.mean(frame_diffs)
-            diff_std = np.std(frame_diffs)
-            # Log diff_mean and diff_std
-            bt.logging.info(f"Diff mean: {diff_mean}, Diff std: {diff_std}")
-
-            if diff_std < 0.01 or diff_mean < 0.01:
-                return False
-                
-            return True
-            
-        except Exception as e:
-            bt.logging.error(f"Error verifying video authenticity: {str(e)}")
-            return False 
+        return verify_video_authenticity_common(video_path)
 
 
 class MDVQS:
@@ -314,57 +318,7 @@ class MDVQS:
 
     def verify_video_authenticity(self, video_path: str) -> bool:
         """Checks if video is authentic using entropy and frame differences."""
-        try:
-            cap = cv2.VideoCapture(video_path)
-            prev_frame = None
-            frame_diffs = []
-            entropies = []
-            
-            while cap.isOpened():
-                ret, frame = cap.read()
-                if not ret:
-                    break
-                    
-                # Frame entropy
-                gray = cv2.cvtColor(frame, cv2.COLOR_BGR2GRAY)
-                hist = cv2.calcHist([gray], [0], None, [256], [0, 256])
-                hist = hist / hist.sum()
-                entropy = -np.sum(hist * np.log2(hist + 1e-10))
-                entropies.append(entropy)
-                
-                if prev_frame is not None:
-                    # Frame difference
-                    diff = cv2.absdiff(frame, prev_frame)
-                    frame_diffs.append(np.mean(diff))
-                
-                prev_frame = frame.copy()
-            
-            cap.release()
-            
-            if not frame_diffs or not entropies:
-                return False
-                
-            # Check entropy distribution
-            entropy_mean = np.mean(entropies)
-            entropy_std = np.std(entropies)
-            # Log entropy_mean and entropy_std
-            bt.logging.info(f"Entropy mean: {entropy_mean}, Entropy std: {entropy_std}")
-            if entropy_std < 0.05 or entropy_mean < 2.0:
-                return False
-                
-            # Check frame differences
-            diff_mean = np.mean(frame_diffs)
-            diff_std = np.std(frame_diffs)
-            # Log diff_mean and diff_std
-            bt.logging.info(f"Diff mean: {diff_mean}, Diff std: {diff_std}")
-            if diff_std < 0.01 or diff_mean < 0.01:
-                return False
-                
-            return True
-            
-        except Exception as e:
-            bt.logging.error(f"Error verifying video authenticity: {str(e)}")
-            return False
+        return verify_video_authenticity_common(video_path)
 
 
 

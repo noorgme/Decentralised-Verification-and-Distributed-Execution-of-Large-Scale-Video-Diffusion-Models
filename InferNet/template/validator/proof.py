@@ -20,7 +20,7 @@ def derive_seed(challenge: bytes, wallet_address: str) -> int:
 
 def verify_proof_signature(
     miner_hotkey_ss58: str,
-    miner_public_key: bytes,
+    # miner_public_key: bytes,
     challenge: bytes,
     seed: int,
     video_bytes: bytes,
@@ -30,9 +30,15 @@ def verify_proof_signature(
     """Checks if the miner's signature is valid for the given proof data."""
     try:
         bt.logging.debug(f"=== SIGNATURE VERIFICATION DEBUG START ===")
+        # bt.logging.debug(f"Input parameters:")
+        # bt.logging.debug(f"  miner_hotkey_ss58: {miner_hotkey_ss58}")
+        # bt.logging.debug(f"  miner_public_key: {miner_public_key.hex() if miner_public_key else 'None'}")
+        # Derive miner public key from SS58 hotkey
+        keypair = bt.Keypair(ss58_address=miner_hotkey_ss58)
+        miner_public_key = keypair.public_key
+        bt.logging.debug(f"Derived miner_public_key: {miner_public_key.hex()} from hotkey {miner_hotkey_ss58}")
         bt.logging.debug(f"Input parameters:")
         bt.logging.debug(f"  miner_hotkey_ss58: {miner_hotkey_ss58}")
-        bt.logging.debug(f"  miner_public_key: {miner_public_key.hex() if miner_public_key else 'None'}")
         bt.logging.debug(f"  challenge: {challenge.hex()}")
         bt.logging.debug(f"  seed: {seed}")
         bt.logging.debug(f"  video_bytes length: {len(video_bytes)}")
@@ -40,9 +46,9 @@ def verify_proof_signature(
         bt.logging.debug(f"  signature: {signature.hex()}")
         bt.logging.debug(f"  signature length: {len(signature)}")
         
-        if miner_public_key is None:
-            bt.logging.error("No miner public key available for verification")
-            return False
+        # if miner_public_key is None:
+        #     bt.logging.error("No miner public key available for verification")
+        #     return False
         
         bt.logging.debug(f"Miner public key is available: {miner_public_key.hex()}")
         
@@ -62,35 +68,36 @@ def verify_proof_signature(
         
         # Create keypair for verification
         bt.logging.debug(f"Creating keypair with sr25519 crypto type...")
-        try:
-            # Convert public key bytes to hex string
-            public_key_hex = miner_public_key.hex()
-            bt.logging.debug(f"Public key hex: {public_key_hex}")
-            # Use crypto_type=1 for sr25519 to match the miner
-            kp: bt.Keypair = bt.Keypair(public_key=public_key_hex, crypto_type=1)
-            bt.logging.debug(f"Created keypair successfully")
-            bt.logging.debug(f"  Keypair public key: {kp.public_key.hex()}")
-            bt.logging.debug(f"  Keypair crypto type: {kp.crypto_type}")
-            bt.logging.debug(f"  Keypair ss58 address: {kp.ss58_address}")
-        except Exception as keypair_error:
-            bt.logging.error(f"Error creating keypair with sr25519: {keypair_error}")
-            bt.logging.debug(f"Trying fallback without crypto type...")
-            try:
-                # Convert public key bytes to hex string
-                public_key_hex = miner_public_key.hex()
-                kp: bt.Keypair = bt.Keypair(public_key=public_key_hex)
-                bt.logging.debug(f"Created keypair (fallback) successfully")
-                bt.logging.debug(f"  Keypair public key: {kp.public_key.hex()}")
-                bt.logging.debug(f"  Keypair crypto type: {kp.crypto_type}")
-                bt.logging.debug(f"  Keypair ss58 address: {kp.ss58_address}")
-            except Exception as fallback_error:
-                bt.logging.error(f"Error creating keypair (fallback): {fallback_error}")
-                return False
+        # try:
+        #     # Convert public key bytes to hex string
+        #     public_key_hex = miner_public_key.hex()
+        #     bt.logging.debug(f"Public key hex: {public_key_hex}")
+        #     # Use crypto_type=1 for sr25519 to match the miner
+        #     kp: bt.Keypair = bt.Keypair(public_key=public_key_hex, crypto_type=1)
+        #     bt.logging.debug(f"Created keypair successfully")
+        #     bt.logging.debug(f"  Keypair public key: {kp.public_key.hex()}")
+        #     bt.logging.debug(f"  Keypair crypto type: {kp.crypto_type}")
+        #     bt.logging.debug(f"  Keypair ss58 address: {kp.ss58_address}")
+        # except Exception as keypair_error:
+        #     bt.logging.error(f"Error creating keypair with sr25519: {keypair_error}")
+        #     bt.logging.debug(f"Trying fallback without crypto type...")
+        #     try:
+        #         # Convert public key bytes to hex string
+        #         public_key_hex = miner_public_key.hex()
+        #         kp: bt.Keypair = bt.Keypair(public_key=public_key_hex)
+        #         bt.logging.debug(f"Created keypair (fallback) successfully")
+        #         bt.logging.debug(f"  Keypair public key: {kp.public_key.hex()}")
+        #         bt.logging.debug(f"  Keypair crypto type: {kp.crypto_type}")
+        #         bt.logging.debug(f"  Keypair ss58 address: {kp.ss58_address}")
+        #     except Exception as fallback_error:
+        #         bt.logging.error(f"Error creating keypair (fallback): {fallback_error}")
+        #         return False
         
         # Verify signature
         bt.logging.debug(f"Calling kp.verify(message, signature)...")
         bt.logging.debug(f"  message: {message.hex()}")
         bt.logging.debug(f"  signature: {signature.hex()}")
+        kp = bt.Keypair(public_key=miner_public_key.hex(), crypto_type=1)
         
         try:
             result = kp.verify(message, signature)
@@ -150,7 +157,6 @@ def verify_proof_of_inference(
         # now verify the signature
         if not verify_proof_signature(
             miner_hotkey_ss58,
-            None,
             challenge,
             seed,
             video_bytes,
@@ -170,7 +176,20 @@ def verify_proof_of_inference(
             decoded_leaf_data[t] = (z_bytes, eps_bytes, path)
 
         # Check Merkle tree and UNet steps
-        for step_i, (t, (z_b, eps_b, path)) in enumerate(decoded_leaf_data.items()):
+        # Use the original order of timesteps as they were processed by the miner
+        items = list(decoded_leaf_data.items())  # Keep original order
+        timestep_to_step = {timestep: step_idx for step_idx, (timestep, _) in enumerate(items)}
+        
+        # Get the actual alpha values from the proof if available, otherwise use config
+        proof_alphas = proof.get('alphas', [])
+        if proof_alphas and len(proof_alphas) > 0:
+            bt.logging.debug(f"Using alpha values from proof for UNet verification: {proof_alphas}")
+            alphas_to_use = proof_alphas
+        else:
+            bt.logging.debug(f"No alpha values in proof, using config alphas for UNet verification: {config_for_unet['alphas']}")
+            alphas_to_use = config_for_unet['alphas']
+        
+        for t, (z_b, eps_b, path) in decoded_leaf_data.items():
             # Verify Merkle path
             leaf_hash = hashlib.sha256(
                 t.to_bytes(2, "big") + z_b + eps_b
@@ -180,10 +199,45 @@ def verify_proof_of_inference(
                 bt.logging.warning(f"Merkle path failed at timestep {t}")
                 return False
 
-            # Check UNet step using step index, not raw timestep value
-            if not run_unet_step(z_b, eps_b, config_for_unet, step_i):
+            # Check UNet step using the correct step index based on original order
+            step_i = timestep_to_step.get(t)
+            if step_i is None:
+                bt.logging.warning(f"Could not determine step index for timestep {t}")
+                return False
+                
+            if not run_unet_step(z_b, eps_b, {'alphas': alphas_to_use, **config_for_unet}, step_i):
                 bt.logging.warning(f"UNet step check failed at timestep {t} (step {step_i})")
                 return False
+
+        # Cross-step consistency check for temporal coherence
+        if len(decoded_leaf_data) >= 2:
+            # Convert decoded_leaf_data to the format expected by verify_temporal_coherence_spot_check
+            leaves_result = {}
+            for t, (z_b, eps_b, _) in decoded_leaf_data.items():
+                # Convert bytes back to base64 strings for the dedicated function
+                z_b64 = base64.b64encode(z_b).decode('utf-8')
+                eps_b64 = base64.b64encode(eps_b).decode('utf-8')
+                leaves_result[str(t)] = (z_b64, eps_b64, [])  # Empty proof path since we already verified Merkle
+            
+            # Get all timesteps in order
+            spot_check_indices = [t for t, _ in items]
+            
+            # Use the dedicated temporal coherence verification function
+            temporal_coherence_ok = verify_temporal_coherence_spot_check(
+                spot_check_indices=spot_check_indices,
+                leaves_result=leaves_result,
+                timestep_to_step=timestep_to_step,
+                proof_alphas=alphas_to_use,
+                unet_config=config_for_unet,
+                request_id="proof_verification",
+                logger=bt.logging
+            )
+            
+            if not temporal_coherence_ok:
+                bt.logging.warning("Temporal coherence check failed in proof verification")
+                return False
+            else:
+                bt.logging.debug("Temporal coherence check passed in proof verification")
 
         return True
 
@@ -316,9 +370,200 @@ def commit_then_reveal_merkle_spotcheck(
     num_to_reveal: int,
     random_seed: int
 ) -> List[int]:
-    """Picks random leaves to reveal for spot-checking."""
+    """Picks random leaves to reveal for spot-checking, ensuring temporal coherence."""
     rng = random.Random(random_seed)
-    indices = list(range(num_leaves))
-    rng.shuffle(indices)
-    return indices[:num_to_reveal]
+    
+    # Pick num_to_reveal starting points, then reveal pairs for temporal coherence
+    if num_leaves < 2:
+        # Fallback to single indices if not enough leaves
+        return list(range(min(num_to_reveal, num_leaves)))
+    
+    max_start = num_leaves - 2
+    starts = rng.sample(range(max_start + 1), min(num_to_reveal, max_start + 1))
+    result = []
+    for s in starts:
+        result.extend([s, s+1])
+    return result
+
+
+def verify_temporal_coherence_spot_check(
+    spot_check_indices: List[int],
+    leaves_result: Dict[str, Tuple[str, str, List[str]]],
+    timestep_to_step: Dict[int, int],
+    proof_alphas: List[float],
+    unet_config: Dict,
+    request_id: str = None,
+    logger=None
+) -> bool:
+    """
+    Verifies temporal coherence for spot-checked leaves.
+    
+    Input Params:
+        spot_check_indices: List of timesteps to check
+        leaves_result: Dictionary mapping timestep strings to (z_b64, eps_b64, proof_path_b64) tuples
+        timestep_to_step: Mapping from timestep values to step indices
+        proof_alphas: Alpha values from the miner's proof
+        unet_config: UNet configuration for tensor reshaping
+        
+        
+    Returns True if temporal coherence check passes, False otherwise
+    """
+    if logger is None:
+        import logging
+        logger = logging.getLogger(__name__)
+    
+    if len(spot_check_indices) < 2:
+        logger.debug(f"[{request_id}] Not enough timesteps for temporal coherence check (need at least 2, got {len(spot_check_indices)})")
+        return True  # Skip if not enough timesteps
+    
+    logger.debug(f"[{request_id}] Performing temporal coherence check on {len(spot_check_indices)} timesteps")
+    logger.debug(f"[{request_id}] Spot check indices: {spot_check_indices}")
+    
+    # Build a list of (timestep, z_bytes, eps_bytes) sorted by timestep
+    leaf_data = {}
+    for i, t in enumerate(spot_check_indices):
+        t_str = str(t)
+        leaf = leaves_result.get(t_str)
+        if leaf and len(leaf) == 3:
+            z_b, eps_b, _ = leaf
+            leaf_data[t] = (z_b, eps_b)
+            logger.debug(f"[{request_id}] Added leaf data for timestep {t}: z_b64_len={len(z_b)}, eps_b64_len={len(eps_b)}")
+        else:
+            logger.warning(f"[{request_id}] Missing or malformed leaf for timestep {t}: {leaf}")
+    
+    logger.debug(f"[{request_id}] Collected leaf data for {len(leaf_data)} timesteps")
+    
+    # Check if we have enough timesteps for temporal coherence
+    if len(leaf_data) < 2:
+        logger.warning(f"[{request_id}] Not enough leaf data for temporal coherence check (need at least 2, got {len(leaf_data)})")
+        logger.warning(f"[{request_id}] Temporal coherence check will be skipped")
+        return True  # Skip if not enough data
+    
+    # Sort by timestep and check consecutive pairs
+    sorted_timesteps = list(leaf_data.keys())
+    logger.debug(f"[{request_id}] Sorted timesteps: {sorted_timesteps}")
+    
+    # Check if we have enough alphas for all timesteps
+    if len(sorted_timesteps) > len(proof_alphas):
+        logger.warning(f"[{request_id}] More timesteps ({len(sorted_timesteps)}) than alphas ({len(proof_alphas)})")
+        logger.warning(f"[{request_id}] Will only check first {len(proof_alphas)} timesteps")
+        sorted_timesteps = sorted_timesteps[:len(proof_alphas)]
+    
+    for idx in range(len(sorted_timesteps) - 1):
+        t_i = sorted_timesteps[idx]
+        t_j = sorted_timesteps[idx + 1]
+        
+        logger.debug(f"[{request_id}] Checking temporal coherence: t_i={t_i} -> t_j={t_j}")
+        
+        z_i_b64, eps_i_b64 = leaf_data[t_i]
+        z_j_b64, eps_j_b64 = leaf_data[t_j]
+        
+        # Decode base64 strings
+        try:
+            z_i_bytes = base64.b64decode(z_i_b64)
+            eps_i_bytes = base64.b64decode(eps_i_b64)
+            z_j_bytes = base64.b64decode(z_j_b64)
+            logger.debug(f"[{request_id}] Decoded bytes: z_i={len(z_i_bytes)}, eps_i={len(eps_i_bytes)}, z_j={len(z_j_bytes)}")
+        except Exception as e:
+            logger.error(f"[{request_id}] Base64 decode error: {e}")
+            return False
+        
+        # Look up the miner's actual step indices:
+        step_i = timestep_to_step.get(t_i)
+        step_j = timestep_to_step.get(t_j)
+        if step_i is None or step_j is None:
+            logger.warning(f"[{request_id}] Could not map timesteps to step indices: t_i={t_i} (step {step_i}), t_j={t_j} (step {step_j})")
+            return False
+        if step_j != step_i + 1:
+            logger.warning(f"[{request_id}] Non-consecutive steps in miner's own schedule: {step_i} → {step_j}")
+            return False
+
+        alpha_t = proof_alphas[step_i]
+        logger.debug(f"[{request_id}] Alpha for step {step_i}: {alpha_t}")
+        
+        # Reconstruct next latent from current step
+        import torch
+        import numpy as np
+        
+        try:
+            # Decode tensors with proper shape handling
+            z_i_tensor = torch.from_numpy(np.frombuffer(z_i_bytes, dtype=np.float16))
+            eps_i_tensor = torch.from_numpy(np.frombuffer(eps_i_bytes, dtype=np.float16))
+            
+            logger.debug(f"[{request_id}] Initial tensor shapes: z_i={z_i_tensor.shape}, eps_i={eps_i_tensor.shape}")
+            
+            # Handle 5D tensor reshaping (batch, channels, frames, height, width)
+            total_elements = z_i_tensor.numel()
+            expected_elements = unet_config['latent_channels'] * unet_config['latent_height'] * unet_config['latent_width']
+            
+            logger.debug(f"[{request_id}] Tensor reshaping: total_elements={total_elements}, expected_elements={expected_elements}")
+            
+            if total_elements > expected_elements:
+                # Reshape to 5D first, then take the first frame
+                num_frames = total_elements // (unet_config['latent_channels'] * unet_config['latent_height'] * unet_config['latent_width'])
+                logger.debug(f"[{request_id}] 5D tensor detected: num_frames={num_frames}")
+                
+                z_i_tensor = z_i_tensor.view(1, unet_config['latent_channels'], num_frames, unet_config['latent_height'], unet_config['latent_width'])
+                eps_i_tensor = eps_i_tensor.view(1, unet_config['latent_channels'], num_frames, unet_config['latent_height'], unet_config['latent_width'])
+                
+                # Take the first frame for verification
+                z_i_tensor = z_i_tensor[0, :, 0, :, :]  # Shape: (latent_channels, latent_height, latent_width)
+                eps_i_tensor = eps_i_tensor[0, :, 0, :, :]  # Shape: (latent_channels, latent_height, latent_width)
+                logger.debug(f"[{request_id}] After 5D reshape: z_i={z_i_tensor.shape}, eps_i={eps_i_tensor.shape}")
+            else:
+                # Reshape to 3D as expected
+                z_i_tensor = z_i_tensor.view(unet_config['latent_channels'], unet_config['latent_height'], unet_config['latent_width'])
+                eps_i_tensor = eps_i_tensor.view(unet_config['latent_channels'], unet_config['latent_height'], unet_config['latent_width'])
+                logger.debug(f"[{request_id}] After 3D reshape: z_i={z_i_tensor.shape}, eps_i={eps_i_tensor.shape}")
+            
+            # Perform the denoising step to predict z_{t+1}
+            alpha_t_tensor = torch.tensor(alpha_t, dtype=torch.float16)
+            logger.debug(f"[{request_id}] Computing z_pred_j with alpha_t={alpha_t}")
+            
+            z_pred_j = (z_i_tensor - (1 - alpha_t_tensor) * eps_i_tensor) / torch.sqrt(alpha_t_tensor)
+            logger.debug(f"[{request_id}] z_pred_j shape: {z_pred_j.shape}")
+            logger.debug(f"[{request_id}] z_pred_j stats: min={z_pred_j.min():.6f}, max={z_pred_j.max():.6f}, mean={z_pred_j.mean():.6f}")
+            
+            # Compare to actual z_j
+            z_j_tensor = torch.from_numpy(np.frombuffer(z_j_bytes, dtype=np.float16))
+            logger.debug(f"[{request_id}] z_j_tensor initial shape: {z_j_tensor.shape}")
+            
+            # Apply same reshaping logic to z_j
+            total_elements_j = z_j_tensor.numel()
+            if total_elements_j > expected_elements:
+                num_frames_j = total_elements_j // (unet_config['latent_channels'] * unet_config['latent_height'] * unet_config['latent_width'])
+                logger.debug(f"[{request_id}] z_j 5D reshape: num_frames_j={num_frames_j}")
+                
+                z_j_tensor = z_j_tensor.view(1, unet_config['latent_channels'], num_frames_j, unet_config['latent_height'], unet_config['latent_width'])
+                z_j_tensor = z_j_tensor[0, :, 0, :, :]
+            else:
+                z_j_tensor = z_j_tensor.view(unet_config['latent_channels'], unet_config['latent_height'], unet_config['latent_width'])
+            
+            logger.debug(f"[{request_id}] z_j_tensor final shape: {z_j_tensor.shape}")
+            logger.debug(f"[{request_id}] z_j_tensor stats: min={z_j_tensor.min():.6f}, max={z_j_tensor.max():.6f}, mean={z_j_tensor.mean():.6f}")
+            
+            # Allow tiny fp16 rounding errors
+            is_close = torch.allclose(z_pred_j, z_j_tensor, atol=1)
+            max_diff = torch.abs(z_pred_j - z_j_tensor).max()
+            mean_diff = torch.abs(z_pred_j - z_j_tensor).mean()
+            
+            logger.debug(f"[{request_id}] Comparison results: is_close={is_close}, max_diff={max_diff:.6f}, mean_diff={mean_diff:.6f}")
+            
+            if not is_close:
+                logger.warning(f"[{request_id}] Cross-step check failed between t={t_i} and t={t_j}")
+                logger.warning(f"[{request_id}] Max difference: {max_diff:.6f}")
+                logger.warning(f"[{request_id}] Mean difference: {mean_diff:.6f}")
+                logger.warning(f"[{request_id}] This indicates a temporal coherence violation!")
+                return False
+            else:
+                logger.debug(f"[{request_id}] Cross-step check passed between t={t_i} and t={t_j}")
+                logger.debug(f"[{request_id}] Max difference: {max_diff:.6f} (within tolerance)")
+                
+        except Exception as e:
+            logger.error(f"[{request_id}] Error in temporal coherence computation: {str(e)}")
+            logger.error(f"[{request_id}] Exception details:", exc_info=True)
+            return False
+    
+    logger.debug(f"[{request_id}] TEMPORAL COHERENCE CHECK PASSED: All temporal coherence verifications successful")
+    return True
 

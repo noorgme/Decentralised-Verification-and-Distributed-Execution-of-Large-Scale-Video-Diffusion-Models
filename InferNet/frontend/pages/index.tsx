@@ -165,7 +165,7 @@ export default function Home () {
       <div className="min-h-screen flex items-center justify-center bg-gradient-to-br from-gray-50 to-blue-100 py-12 px-4">
         <div className="w-full max-w-xl bg-white rounded-2xl shadow-2xl p-10 space-y-8 border border-blue-100">
           <h2 className="text-3xl font-extrabold text-center text-blue-700 mb-2 tracking-tight">Generate a Video</h2>
-          <p className="text-center text-gray-500 mb-6">Describe your video prompt and deposit ETH to start the job.</p>
+          <p className="text-center text-gray-500 mb-6">Describe your video prompt and deposit TAO to start the job.</p>
 
           {/* prompt  --------------------------------------------------- */}
           <label className="block space-y-2">

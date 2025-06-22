@@ -83,7 +83,7 @@ class InferNetConfig(bt.Config):
             'latent_channels': 4,
             'latent_height': 16,  # 128 // 8 for minimal height
             'latent_width': 16,   # 128 // 8 for minimal width
-            'alphas': [0.9999, 0.9998, 0.9997, 0.9996]  # 4 steps for ultra-fast diffusion
+            'alphas': [0.9999, 0.9998, 0.9997, 0.9996, 0.9995, 0.9994, 0.9993, 0.9992]  # 8 steps for ultra-fast diffusion
         }
         
         # Validator configuration
@@ -113,7 +113,7 @@ class InferNetConfig(bt.Config):
         
         # Diffusion configuration
         self.diffusion = {
-            'num_steps': 4,  # Number of denoising steps (reduced from 10)
+            'num_steps': 8,  # Number of denoising steps
             'guidance_scale': 7.5,  # Guidance scale for generation
             'eta': 0.0  # Eta parameter for DDIM
         }

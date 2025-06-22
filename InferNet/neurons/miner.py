@@ -22,7 +22,6 @@ import sys
 import asyncio
 import uuid
 
-# Add the project root to the Python path
 sys.path.append(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
 import time
@@ -314,17 +313,17 @@ class Miner(BaseMinerNeuron):
             logger.debug(f"Self-verifying signature...")
             try:
                 is_valid = self.wallet.hotkey.verify(message, signature)
-                logger.debug(f"✅ Self-verification result: {is_valid}")
+                logger.debug(f"Self-verification result: {is_valid}")
                 if not is_valid:
-                    logger.error("❌ Self-verification failed! This indicates a signing issue.")
+                    logger.error("Self-verification failed! This indicates a signing issue.")
             except Exception as verify_error:
-                logger.error(f"❌ Error in self-verification: {verify_error}")
+                logger.error(f"Error in self-verification: {verify_error}")
             
             logger.debug(f"=== MINER SIGNING DEBUG END ===")
             return signature
             
         except Exception as e:
-            logger.error(f"❌ Error signing proof: {str(e)}", exc_info=True)
+            logger.error(f"Error signing proof: {str(e)}", exc_info=True)
             self.metrics['errors'].append({
                 'timestamp': datetime.now().isoformat(),
                 'error': str(e),
@@ -352,7 +351,7 @@ class Miner(BaseMinerNeuron):
         
         if is_spot_check:
             request_id = getattr(synapse, 'request_id', str(uuid.uuid4()))
-            logger.info(f"[{request_id}] 🔍 SPOT-CHECK REQUEST detected (seed=0, empty challenge)")
+            logger.info(f"[{request_id}] SPOT-CHECK REQUEST detected (seed=0, empty challenge)")
             
             # For spot-check requests, we need to get the caller hotkey from the dendrite
             caller_hotkey = None
@@ -435,11 +434,11 @@ class Miner(BaseMinerNeuron):
                     'leaf_data': result,  # Store all leaves here
                 }
                 
-                logger.info(f"[{request_id}] ✅ SPOT-CHECK: Returning {len(result)} leaves")
+                logger.info(f"[{request_id}] SPOT-CHECK: Returning {len(result)} leaves")
                 return synapse
                 
             except Exception as e:
-                logger.error(f"[{request_id}] ❌ Error in spot-check handling: {str(e)}", exc_info=True)
+                logger.error(f"[{request_id}] Error in spot-check handling: {str(e)}", exc_info=True)
                 # Return empty response for spot-check
                 synapse.video_data_b64 = ""
                 synapse.merkle_root = ""
@@ -468,7 +467,7 @@ class Miner(BaseMinerNeuron):
                 synapse._rpc_result = result
                 return synapse
         
-        # Normal video generation request
+        
         self.metrics['total_requests'] += 1
         # Use the request_id from the synapse if provided, otherwise generate a fallback
         request_id = getattr(synapse, 'request_id', None)
@@ -531,6 +530,20 @@ class Miner(BaseMinerNeuron):
                 num_steps = num_steps.num_steps
             scheduler.set_timesteps(num_steps)
             logger.info(f"[{request_id}] Using {len(scheduler.timesteps)} denoising steps")
+            
+            # Extract the actual alpha values from the scheduler for verification
+            # The scheduler uses these alphas internally for the DDPM formula
+            alphas = []
+            for i, t in enumerate(scheduler.timesteps):
+                # Get the alpha value for this timestep from the scheduler
+                alpha_t = scheduler.alphas_cumprod[t] if hasattr(scheduler, 'alphas_cumprod') else 0.9999
+                # Convert to Python float for JSON serialisation
+                if hasattr(alpha_t, 'item'):
+                    alpha_t = alpha_t.item()
+                alphas.append(alpha_t)
+                logger.debug(f"[{request_id}] Step {i}: timestep {t}, alpha {alpha_t}")
+            
+            logger.info(f"[{request_id}] Extracted {len(alphas)} alpha values from scheduler")
             
             # Initial noise
             z = torch.randn(
@@ -649,6 +662,7 @@ class Miner(BaseMinerNeuron):
                 'seed': seed,
                 'challenge': challenge,
                 'leaf_data': leaf_data_b64,
+                'alphas': alphas,  # Include actual alpha values from scheduler
             }
             
             # Debug: Log what we're setting
@@ -673,7 +687,7 @@ class Miner(BaseMinerNeuron):
                 'request_id': request_id
             })
             logger.error(f"[{request_id}] Error generating video: {str(e)}", exc_info=True)
-            # Ensure synapse object is properly initialized even on error
+            # Ensure synapse object is properly initialised even on error
             synapse.video_data_b64 = ""
             synapse.merkle_root = ""
             synapse.timesteps = []
@@ -713,13 +727,13 @@ class Miner(BaseMinerNeuron):
                 'leaf_data': {},
             }
             
-        # Debug: Log final synapse state
+       
         logger.info(f"[{request_id}] FINAL MINER DEBUG: Returning timesteps")
         logger.info(f"[{request_id}]   - synapse.timesteps: {synapse.timesteps}")
         logger.info(f"[{request_id}]   - synapse.timesteps type: {type(synapse.timesteps)}")
         logger.info(f"[{request_id}]   - synapse.timesteps length: {len(synapse.timesteps)}")
         
-        # Debug: Log synapse structure
+      
         logger.debug(f"[{request_id}] Synapse structure:")
         logger.debug(f"  - video_data_b64: {type(synapse.video_data_b64)} (length: {len(synapse.video_data_b64)})")
         logger.debug(f"  - merkle_root: {type(synapse.merkle_root)} (length: {len(synapse.merkle_root)})")
@@ -732,7 +746,7 @@ class Miner(BaseMinerNeuron):
         # Ensure synapse is JSON serialisable
         try:
             import json
-            json.dumps(synapse.dict())
+            json.dumps(synapse.model_dump())
             logger.debug(f"[{request_id}] Synapse is JSON serialisable")
         except Exception as e:
             logger.error(f"[{request_id}] Synapse is NOT JSON serialisable: {e}")
@@ -836,7 +850,7 @@ class Miner(BaseMinerNeuron):
             logger.info(f"Received RevealLeavesSynapse request for indices: {synapse.indices}")
             logger.info(f"Request ID: {synapse.request_id}, Caller: {synapse.caller_hotkey}")
             
-            # Use the existing open_leaves logic
+            
             indices = [int(i) for i in synapse.indices]
             key = (synapse.caller_hotkey, synapse.request_id)
             leaf_data = self._leaf_data_by_request.get(key)
