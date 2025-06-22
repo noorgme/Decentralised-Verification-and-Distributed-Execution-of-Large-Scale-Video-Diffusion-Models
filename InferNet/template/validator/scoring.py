@@ -174,6 +174,19 @@ class MDVQS:
             transforms.Normalize(mean=[0.485, 0.456, 0.406], std=[0.229, 0.224, 0.225])
         ])
 
+    def compute_quality_score(self, video_path: str, prompt: str) -> float:
+        """
+        Computes overall video quality score using MD-VQS.
+        Returns the weighted combination of prompt fidelity, video quality, and temporal consistency.
+        """
+        try:
+            pf, vq, tc, total_score = self.compute_md_vqs(video_path, prompt)
+            bt.logging.info(f"MD-VQS total score: {total_score:.4f} (PF: {pf:.4f}, VQ: {vq:.4f}, TC: {tc:.4f})")
+            return total_score
+        except Exception as e:
+            bt.logging.error(f"Error computing quality score: {str(e)}")
+            return 0.0
+
     def compute_md_vqs(self, video_path: str, prompt: str) -> Tuple[float, float, float, float]:
         # Computes overall video quality score from all metrics
         try:
@@ -254,10 +267,11 @@ class MDVQS:
             return 0.0
 
     def compute_video_quality(self, video_path: str) -> float:
-        """Compute video quality score using LPIPS."""
+        """Compute video quality score using LPIPS between consecutive frames."""
         try:
             cap = cv2.VideoCapture(video_path)
             frame_qualities = []
+            prev_frame = None
             
             while cap.isOpened():
                 ret, frame = cap.read()
@@ -266,17 +280,29 @@ class MDVQS:
                     
                 frame = cv2.cvtColor(frame, cv2.COLOR_BGR2RGB)
                 frame = Image.fromarray(frame)
-                frame = self.transform(frame).unsqueeze(0).to(self.device)
+                frame_tensor = self.transform(frame).unsqueeze(0).to(self.device)
                 
-                with torch.no_grad():
-                    frame_qualities.append(self.lpips_model(frame, frame).item())
+                if prev_frame is not None:
+                    # Compare current frame with previous frame using LPIPS
+                    with torch.no_grad():
+                        lpips_distance = self.lpips_model(frame_tensor, prev_frame).item()
+                        frame_qualities.append(lpips_distance)
+                
+                prev_frame = frame_tensor
 
             cap.release()
             
             if not frame_qualities:
+                bt.logging.warning("No consecutive frame pairs found for LPIPS calculation")
                 return 0.0
                 
-            return float(np.mean(frame_qualities))
+            # Lower LPIPS distance indicates higher quality (more similar frames)
+            # We invert this to get a quality score where higher is better
+            avg_lpips = float(np.mean(frame_qualities))
+            quality_score = max(0.0, 1.0 - avg_lpips)  # Invert and clamp to [0, 1]
+            
+            bt.logging.info(f"LPIPS video quality score: {quality_score:.4f} (avg LPIPS: {avg_lpips:.4f})")
+            return quality_score
             
         except Exception as e:
             bt.logging.error(f"Error computing video quality: {str(e)}")
