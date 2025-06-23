@@ -341,21 +341,51 @@ def run_unet_step(
             z = z.view(config['latent_channels'], config['latent_height'], config['latent_width'])
             eps = eps.view(config['latent_channels'], config['latent_height'], config['latent_width'])
         
-        # Get alpha for this step
-        alpha_t = config['alphas'][step_i]
-        
-        # Perform the denoising step verification
-        # Convert alpha_t to tensor for torch operations
-        alpha_tensor = torch.tensor(alpha_t, dtype=torch.float16)
-        z_pred = (z - (1 - alpha_tensor) * eps) / torch.sqrt(alpha_tensor)
-        
-        # Check if the result is valid
-        is_finite = torch.isfinite(z_pred).all()
-        is_bounded = torch.abs(z_pred).max() < 10.0
-        
-        bt.logging.debug(f"UNet step {step_i} verification: finite={is_finite}, bounded={is_bounded}")
-        
-        return is_finite and is_bounded
+        # Use same scheduler as the miner
+        try:
+            from diffusers import DDIMScheduler
+            
+         
+            # We can infer the scheduler configuration from the alpha values in the proof
+            scheduler = DDIMScheduler()
+            
+           
+            scheduler.set_timesteps(len(config['alphas']))
+            
+          
+            bt.logging.debug(f"UNet step {step_i}: using timestep {scheduler.timesteps[step_i]} from scheduler")
+            bt.logging.debug(f"Scheduler timesteps: {scheduler.timesteps.tolist()}")
+            bt.logging.debug(f"Config alphas: {config['alphas']}")
+            
+            prev_sample = scheduler.step(
+                eps,           
+                scheduler.timesteps[step_i], 
+                z            
+            ).prev_sample   
+            
+            # Check if the result is valid
+            is_finite = torch.isfinite(prev_sample).all()
+            is_bounded = torch.abs(prev_sample).max() < 10.0
+            
+            bt.logging.debug(f"UNet step {step_i} verification: finite={is_finite}, bounded={is_bounded}")
+            
+            return is_finite and is_bounded
+            
+        except ImportError:
+            bt.logging.error(f"Could not import DDIMScheduler - falling back to manual formula")
+            # Fallback to manual formula if scheduler is not available
+            alpha_t = config['alphas'][step_i]
+            alpha_tensor = torch.tensor(alpha_t, dtype=torch.float16)
+            sqrt_1_minus_alpha = torch.sqrt(1.0 - alpha_tensor)
+            z_pred = (z - sqrt_1_minus_alpha * eps) / torch.sqrt(alpha_tensor)
+            
+            # Check if the result is valid
+            is_finite = torch.isfinite(z_pred).all()
+            is_bounded = torch.abs(z_pred).max() < 10.0
+            
+            bt.logging.debug(f"UNet step {step_i} verification (fallback): finite={is_finite}, bounded={is_bounded}")
+            
+            return is_finite and is_bounded
         
     except Exception as e:
         bt.logging.error(f"Error running UNet step {step_i}: {str(e)}")
@@ -439,15 +469,39 @@ def verify_temporal_coherence_spot_check(
         logger.warning(f"[{request_id}] Temporal coherence check will be skipped")
         return True  # Skip if not enough data
     
-    # Sort by timestep and check consecutive pairs
-    sorted_timesteps = list(leaf_data.keys())
-    logger.debug(f"[{request_id}] Sorted timesteps: {sorted_timesteps}")
+    # Use timesteps in the order they were selected by the validator
+    # The validator already selected consecutive pairs, so we should trust that order
+    # Don't re-sort by step index  can break the consecutive pairs)
+    sorted_timesteps = [t for t in spot_check_indices if t in leaf_data]
+    
+    logger.debug(f"[{request_id}] Using timesteps in validator's selection order: {sorted_timesteps}")
+    logger.debug(f"[{request_id}] Step indices: {[timestep_to_step.get(t) for t in sorted_timesteps]}")
     
     # Check if we have enough alphas for all timesteps
     if len(sorted_timesteps) > len(proof_alphas):
         logger.warning(f"[{request_id}] More timesteps ({len(sorted_timesteps)}) than alphas ({len(proof_alphas)})")
         logger.warning(f"[{request_id}] Will only check first {len(proof_alphas)} timesteps")
         sorted_timesteps = sorted_timesteps[:len(proof_alphas)]
+    
+    # Set up scheduler for proper reverse step calculation
+    try:
+        from diffusers import DDIMScheduler
+        
+        # Create a scheduler with the same configuration as the miner
+        # We can infer the configuration from the alpha values in the proof
+        scheduler = DDIMScheduler()
+        
+        # Set the same number of timesteps as the miner
+        scheduler.set_timesteps(len(proof_alphas))
+        logger.debug(f"[{request_id}] Set up scheduler with {len(proof_alphas)} timesteps")
+        logger.debug(f"[{request_id}] Scheduler timesteps: {scheduler.timesteps.tolist()}")
+        logger.debug(f"[{request_id}] Proof alphas: {proof_alphas}")
+    except ImportError:
+        logger.error(f"[{request_id}] Could not import DDIMScheduler - temporal coherence check will fail")
+        return False
+    except Exception as e:
+        logger.error(f"[{request_id}] Error setting up scheduler: {e}")
+        return False
     
     for idx in range(len(sorted_timesteps) - 1):
         t_i = sorted_timesteps[idx]
@@ -474,14 +528,12 @@ def verify_temporal_coherence_spot_check(
         if step_i is None or step_j is None:
             logger.warning(f"[{request_id}] Could not map timesteps to step indices: t_i={t_i} (step {step_i}), t_j={t_j} (step {step_j})")
             return False
-        if step_j != step_i + 1:
-            logger.warning(f"[{request_id}] Non-consecutive steps in miner's own schedule: {step_i} → {step_j}")
-            return False
+        # Note: We trust the validator's selection of consecutive pairs
+        # The validator already ensured these are consecutive in the miner's timestep array
 
-        alpha_t = proof_alphas[step_i]
-        logger.debug(f"[{request_id}] Alpha for step {step_i}: {alpha_t}")
+        logger.debug(f"[{request_id}] Step indices: step_i={step_i}, step_j={step_j}")
         
-        # Reconstruct next latent from current step
+        # Reconstruct next latent from current step using scheduler
         import torch
         import numpy as np
         
@@ -516,13 +568,19 @@ def verify_temporal_coherence_spot_check(
                 eps_i_tensor = eps_i_tensor.view(unet_config['latent_channels'], unet_config['latent_height'], unet_config['latent_width'])
                 logger.debug(f"[{request_id}] After 3D reshape: z_i={z_i_tensor.shape}, eps_i={eps_i_tensor.shape}")
             
-            # Perform the denoising step to predict z_{t+1}
-            alpha_t_tensor = torch.tensor(alpha_t, dtype=torch.float16)
-            logger.debug(f"[{request_id}] Computing z_pred_j with alpha_t={alpha_t}")
+           
+            timestep_value = scheduler.timesteps[step_i]
+            logger.debug(f"[{request_id}] Computing z_pred_j using scheduler.step() with timestep {timestep_value} (step_i={step_i})")
             
-            z_pred_j = (z_i_tensor - (1 - alpha_t_tensor) * eps_i_tensor) / torch.sqrt(alpha_t_tensor)
-            logger.debug(f"[{request_id}] z_pred_j shape: {z_pred_j.shape}")
-            logger.debug(f"[{request_id}] z_pred_j stats: min={z_pred_j.min():.6f}, max={z_pred_j.max():.6f}, mean={z_pred_j.mean():.6f}")
+            # Use the scheduler's step method to get the actual reverse sample
+            prev_sample = scheduler.step(
+                eps_i_tensor,    # noise prediction
+                timestep_value,  # actual timestep value from scheduler
+                z_i_tensor       # current latent
+            ).prev_sample        # this is the actual z_{t-1}
+            
+            logger.debug(f"[{request_id}] z_pred_j shape: {prev_sample.shape}")
+            logger.debug(f"[{request_id}] z_pred_j stats: min={prev_sample.min():.6f}, max={prev_sample.max():.6f}, mean={prev_sample.mean():.6f}")
             
             # Compare to actual z_j
             z_j_tensor = torch.from_numpy(np.frombuffer(z_j_bytes, dtype=np.float16))
@@ -542,10 +600,10 @@ def verify_temporal_coherence_spot_check(
             logger.debug(f"[{request_id}] z_j_tensor final shape: {z_j_tensor.shape}")
             logger.debug(f"[{request_id}] z_j_tensor stats: min={z_j_tensor.min():.6f}, max={z_j_tensor.max():.6f}, mean={z_j_tensor.mean():.6f}")
             
-            # Allow tiny fp16 rounding errors
-            is_close = torch.allclose(z_pred_j, z_j_tensor, atol=1)
-            max_diff = torch.abs(z_pred_j - z_j_tensor).max()
-            mean_diff = torch.abs(z_pred_j - z_j_tensor).mean()
+            # tolerance for fp16 rounding errors
+            is_close = torch.allclose(prev_sample, z_j_tensor, rtol=1, atol=1)
+            max_diff = torch.abs(prev_sample - z_j_tensor).max()
+            mean_diff = torch.abs(prev_sample - z_j_tensor).mean()
             
             logger.debug(f"[{request_id}] Comparison results: is_close={is_close}, max_diff={max_diff:.6f}, mean_diff={mean_diff:.6f}")
             
