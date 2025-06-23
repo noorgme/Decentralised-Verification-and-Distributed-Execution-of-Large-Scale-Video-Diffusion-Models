@@ -1,4 +1,3 @@
-#!/usr/bin/env python3
 # FSDP + chunking + CCI and inter-chunk smoothing benchmark.
 
 import os
@@ -106,10 +105,22 @@ class DistributedVideoDiffuser:
         if cfg.use_ctx:
             C = self.unet.config.in_channels
             shape_ctx = (1, C, 1, cfg.height // 8, cfg.width // 8)
+            
+            # Compute global context as average latent over all timesteps on rank 0
             if self.rank == 0:
-                ctx = torch.zeros(shape_ctx, device=cfg.device, dtype=torch.float16)
+                # Create initial noise for the full sequence
+                torch.manual_seed(0)
+                full_noise = torch.randn(1, C, cfg.num_frames, cfg.height // 8, cfg.width // 8, 
+                                       device=cfg.device, dtype=torch.float16)
+                full_noise *= self.pipe.scheduler.init_noise_sigma
+                
+                # Compute average latent across all timesteps
+                ctx = full_noise.mean(dim=2, keepdim=True)  # Average over time dimension
+                LOG.info(f"Computed global context with shape {ctx.shape}", extra={"rank": self.rank})
             else:
                 ctx = torch.empty(shape_ctx, device=cfg.device, dtype=torch.float16)
+            
+            # Broadcast the global context to all ranks
             dist.broadcast(ctx, src=0)
             self.ctx = ctx
         else:
@@ -121,6 +132,7 @@ class DistributedVideoDiffuser:
         for t in tqdm(sched.timesteps, desc=f"Rank {self.rank}: denoising", position=self.rank, leave=False):
             x = sched.scale_model_input(torch.cat([lat]*2), t)
             if self.ctx is not None:
+                # Inject global context: repeat context to match chunk length and add weighted context
                 ctx_rep = self.ctx.repeat(1, 1, lat.shape[2], 1, 1)
                 x = x + self.cfg.context_weight * ctx_rep
             emb = torch.cat([self.uncond_emb, self.cond_emb], dim=0)
