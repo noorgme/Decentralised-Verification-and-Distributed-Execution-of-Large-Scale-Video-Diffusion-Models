@@ -1,3 +1,5 @@
+## SHOULD GO IN LEGACY FOLDER
+
 import numpy as np, itertools, pathlib, math
 from joblib import Parallel, delayed
 from tqdm import tqdm
