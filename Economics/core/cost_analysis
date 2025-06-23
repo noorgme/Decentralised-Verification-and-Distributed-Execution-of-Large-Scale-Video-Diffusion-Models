@@ -1,0 +1,95 @@
+import numpy as np, pathlib
+
+# Economic constants (match Stage 1)
+TAO_USD      = 436.0
+T_STEPS      = 30
+TAO_PER_STEP = 6.2e-6           # 3.3 s @ A100
+COST_STEP    = TAO_PER_STEP
+GAS_FEE      = 0.0002
+E_SUBNET     = 0.005            # TAO/block
+REWARD_SHARE = 0.41             # miner's cut
+VAL_SHARE    = 0.41 # validator's cut
+N_MINERS     = 10
+N_VAL        = 5
+SPLIT_MINER  = 0.9
+SPLIT_VAL    = 0.1
+BETA         = 0.95
+DISC         = 1 - BETA
+K_DRIFT      = 200              # epochs for honest drift
+
+#  Load Stage 1 outputs 
+d       = np.load("sim_data2/results_stage1.npz")
+gammas  = d["gammas"]; alphas = d["alphas"]; slashes = d["slashes"]
+EVc     = d["EV_cheat"]    # (G * A * F)
+EVh_raw = d["EV_honest"]   # unused now
+
+# Precompute constants
+R_val = VAL_SHARE * E_SUBNET / N_VAL        # per-validator block reward
+C_comp_miner = T_STEPS * COST_STEP
+
+#  Honest-weight drift simulation to get R(γ)
+def honest_reward_share(gamma):
+    rng = np.random.default_rng(0)
+    # initialize random weights for 5 validators * 10 miners
+    W = rng.random((N_VAL, N_MINERS))
+    W /= W.sum(axis=1, keepdims=True)
+    # simulate K_DRIFT epochs: no slashes (pd=0), perfect MD-VQS (Q=1)
+    bonus = 0.5 / N_MINERS + 1.0 / N_MINERS
+    eta   = 0.01
+    for _ in range(K_DRIFT):
+        # κ-clipping trivial if no slashes; skip for speed
+        # reward update
+        # each validator reweights so that honest miner (col 0) gains share:
+        honest = np.zeros(N_MINERS, bool); honest[0] = True
+        W[:, honest] = (1-eta)*W[:, honest] + eta*bonus
+        W /= W.sum(axis=1, keepdims=True)
+    # final average rank share of miner 0
+    rank0 = (W[:, 0]).sum()
+    total = W.sum()
+    return rank0 / total       # R(γ)
+
+R_gamma = np.array([honest_reward_share(g) for g in gammas])
+print(" Honest drift shares R(γ):", dict(zip(gammas, R_gamma.round(3))))
+
+shape = EVc.shape
+Dmin_tao = np.full(shape, np.nan)
+Dmax_tao = np.full(shape, np.nan)
+viable   = np.zeros(shape, bool)
+
+for gi, gamma in enumerate(gammas):
+    R_h = R_gamma[gi]
+    miner_term = (C_comp_miner + GAS_FEE - REWARD_SHARE*E_SUBNET*R_h) / SPLIT_MINER
+    for ai, alpha in enumerate(alphas):
+        k = max(1, int(round(alpha*T_STEPS)))
+        C_val = k * COST_STEP
+        pd_max = k / T_STEPS  # approximate worst-case detection
+
+        for fi, f in enumerate(slashes):
+            if not (EVc[gi, ai, fi] < 0):
+                continue
+
+            # deposit floor: both miner & validator EV >= 0
+            D1 = miner_term
+            D2 = max(0.0, (C_val - VAL_SHARE*E_SUBNET/N_VAL) / SPLIT_VAL)
+            D_floor = max(0.0, D1, D2)
+
+            # deposit ceiling: keep cheater EV negative
+            gain = (1-pd_max) * SPLIT_MINER
+            if gain <= 0:
+                D_ceil = np.inf
+            else:
+                D_ceil = -EVc[gi, ai, fi] / gain
+
+            if D_floor <= D_ceil:
+                Dmin_tao[gi, ai, fi] = D_floor
+                Dmax_tao[gi, ai, fi] = D_ceil
+                viable[gi, ai, fi] = True
+
+Dmin_usd = Dmin_tao * TAO_USD
+Dmax_usd = Dmax_tao * TAO_USD
+
+pathlib.Path("sim_data2").mkdir(exist_ok=True)
+np.savez("sim_data2/results_stage2.npz",
+         gammas=gammas, alphas=alphas, slashes=slashes,
+         Dmin_usd=Dmin_usd, Dmax_usd=Dmax_usd, viable=viable)
+print("Stage-2 results with drift & val reward saved.")
